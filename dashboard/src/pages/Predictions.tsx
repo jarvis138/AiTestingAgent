@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Typography, Box, TextField, Button, CircularProgress, Paper } from '@mui/material';
+import { Typography, Box, TextField, Button, CircularProgress, Paper, Stack } from '@mui/material';
 import axios from 'axios';
 
 const Predictions = () => {
@@ -23,15 +23,31 @@ const Predictions = () => {
     setLoading(false);
   };
 
+  const handleExplain = async () => {
+    setLoading(true);
+    try {
+      const resp = await axios.post('/explain', {
+        repo: 'demo',
+        file,
+        features,
+      });
+      setResult(resp.data);
+    } catch (e) {
+      setResult({ error: 'Explain failed (ensure model with feature_columns is trained).' });
+    }
+    setLoading(false);
+  };
+
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom>
         Defect Predictions
       </Typography>
-      <Box sx={{ mb: 2 }}>
-        <TextField label="File path" value={file} onChange={e => setFile(e.target.value)} sx={{ mr: 2 }} />
+      <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+        <TextField label="File path" value={file} onChange={e => setFile(e.target.value)} />
         <Button variant="contained" onClick={handlePredict} disabled={loading}>Predict</Button>
-      </Box>
+        <Button variant="outlined" onClick={handleExplain} disabled={loading}>Explain</Button>
+      </Stack>
       {loading && <CircularProgress />}
       {result && (
         <Paper sx={{ p: 2, mt: 2 }}>

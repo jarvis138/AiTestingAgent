@@ -7,24 +7,27 @@ What's included:
 - FastAPI orchestrator with:
   - `/predict` - defect prediction (loads a simple RandomForest model if trained)
   - `/generate_test` - uses OpenAI (if `OPENAI_API_KEY` provided) to generate Playwright tests
-  - `/run_tests` - runs Playwright tests via the Node container
+   - `/run_tests` - runs Playwright tests locally via npx (or use the Playwright container)
+   - `/health` - quick status check (model loaded, memory stats)
   - `/self_heal` - basic heuristic suggestions for locator fixes
 - Playwright Node.js project that can run generated or example tests
-- Streamlit dashboard for demoing predictions and test generation
+- React dashboard (dashboard/) for visualizing analytics and invoking endpoints
 - Docker Compose to run services locally
 - Simple model training script to create a demo defect predictor
 
 ## Quickstart (local, Docker)
 1. Install Docker & Docker Compose.
 2. Copy `.env.example` to `.env` and add your `OPENAI_API_KEY` if you want LLM-driven test generation.
-3. Build the model (optional but recommended):
-   - Run: `docker-compose run --rm orchestrator python src/models/train_defect_model.py`
-   - This will create `src/models/model.pkl` inside the container filesystem.
+3. Optional: Build the model for prediction/explainability
+   - Install ML deps locally: `py -m pip install -r requirements-ml.txt`
+   - Or inside Docker: `docker-compose run --rm orchestrator pip install -r requirements-ml.txt`
+   - Then run: `docker-compose run --rm orchestrator python src/models/train_defect_model.py`
+   - This will create `src/models/defect_model.pkl`.
 4. Start services:
    - `docker-compose up --build`
 5. Visit:
-   - FastAPI: http://localhost:8000
-   - Streamlit Dashboard: http://localhost:8501
+   - FastAPI: http://localhost:8000 (health: /health)
+   - React Dashboard: cd dashboard && npm start (http://localhost:3000)
 
 ## Notes
 - This is a starter. For production, you should:

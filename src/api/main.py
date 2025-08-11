@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 import subprocess, uuid, os, json, shutil
 import pickle
 import traceback
@@ -64,6 +64,7 @@ class GenerateTestRequest(BaseModel):
 
 class RunTestRequest(BaseModel):
     tests: List[str]
+    self_heal: Optional[bool] = False
 
 @app.get('/')
 def root():
@@ -138,7 +139,14 @@ def generate_test(req: GenerateTestRequest):
             )
             code = resp['choices'][0]['message']['content']
             test_id = f"gen-{uuid.uuid4().hex[:8]}"
-            return {"test_id": test_id, "framework":"playwright", "code": code}
+            # persist into Playwright tests/generated
+            gen_dir = os.path.join(_playwright_cwd(), 'tests', 'generated')
+            os.makedirs(gen_dir, exist_ok=True)
+            test_path = os.path.join(gen_dir, f"{test_id}.spec.ts")
+            with open(test_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+            rel = os.path.relpath(test_path, _playwright_cwd())
+            return {"test_id": test_id, "framework":"playwright", "code": code, "path": rel}
         else:
             # fallback: return a simple example
             test_id = f"gen-{uuid.uuid4().hex[:8]}"
@@ -149,25 +157,108 @@ test('generated test - example', async ({ page }) => {
   await expect(page).toHaveTitle(/Example Domain/);
 });
 """
-            return {"test_id": test_id, "framework":"playwright", "code": code}
+            gen_dir = os.path.join(_playwright_cwd(), 'tests', 'generated')
+            os.makedirs(gen_dir, exist_ok=True)
+            test_path = os.path.join(gen_dir, f"{test_id}.spec.ts")
+            with open(test_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+            rel = os.path.relpath(test_path, _playwright_cwd())
+            return {"test_id": test_id, "framework":"playwright", "code": code, "path": rel}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-# Run tests locally in the playwright folder using npx, with safe fallbacks
+def _playwright_cwd():
+    """Resolve absolute path to the Playwright project directory."""
+    cand = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../playwright'))
+    if os.path.isdir(cand):
+        return cand
+    return os.path.abspath(os.path.join(os.getcwd(), 'playwright'))
+
+def _run_playwright(tests: List[str]):
+    npx = shutil.which('npx') or shutil.which('npx.cmd')
+    cwd = _playwright_cwd()
+    if not npx:
+        return None, cwd, {"error": "npx not found. Install Node.js or run tests via the playwright Docker service."}
+    cmd = [npx, 'playwright', 'test', *tests, '--reporter=list'] if tests else [npx, 'playwright', 'test', '--reporter=list']
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
+    return result, cwd, None
+
+def _extract_selector_from_output(text: str) -> Optional[str]:
+    if not text:
+        return None
+    # naive patterns commonly seen in Playwright errors
+    for line in text.splitlines():
+        l = line.strip().lower()
+        if 'selector' in l and ('not found' in l or 'strict mode' in l or 'waiting for' in l):
+            # try to get quoted selector from the original line
+            for quote in ("'", '"', '`'):
+                parts = line.split(quote)
+                if len(parts) >= 3:
+                    sel = parts[1]
+                    if len(sel) < 200:
+                        return sel
+    return None
+
+def _apply_selector_heal(file_path: str, old_selector: str, new_selector: str) -> bool:
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            src = f.read()
+        if old_selector not in src:
+            return False
+        src2 = src.replace(old_selector, new_selector)
+        if src2 == src:
+            return False
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(src2)
+        return True
+    except Exception:
+        return False
+
+# Run tests locally in the playwright folder using npx, with optional self-heal
 @app.post('/run_tests')
 def run_tests(req: RunTestRequest):
     try:
-        # Ensure we have npx available
-        npx = shutil.which('npx') or shutil.which('npx.cmd')
-        cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../playwright'))
-        if not os.path.isdir(cwd):
-            cwd = os.path.abspath(os.path.join(os.getcwd(), 'playwright'))
-        if not npx:
-            return {"error": "npx not found. Install Node.js or run tests via the playwright Docker service."}
-        cmd = [npx, 'playwright', 'test', *req.tests, '--reporter=list'] if req.tests else [npx, 'playwright', 'test', '--reporter=list']
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
-        return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        result, cwd, err = _run_playwright(req.tests)
+        if err:
+            return err
+        response = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        if result.returncode != 0 and req.self_heal and req.tests:
+            # attempt self-heal for first test file
+            failed_selector = _extract_selector_from_output(result.stderr or result.stdout)
+            if failed_selector:
+                # ask our self_heal endpoint for suggestions
+                try:
+                    heal_payload = {"error": result.stderr or result.stdout, "dom": ""}
+                    from fastapi.testclient import TestClient
+                    client = TestClient(app)
+                    heal_resp = client.post('/self_heal', json=heal_payload)
+                    suggestions = []
+                    if heal_resp.status_code == 200:
+                        suggestions = heal_resp.json().get('suggestions', [])
+                except Exception:
+                    suggestions = []
+                if suggestions:
+                    new_sel = suggestions[0]['selector']
+                    # Resolve absolute path for the test file relative to cwd
+                    test_path = req.tests[0]
+                    abs_test_path = test_path if os.path.isabs(test_path) else os.path.join(cwd, test_path)
+                    if _apply_selector_heal(abs_test_path, failed_selector, new_sel):
+                        # re-run
+                        result2, _, _ = _run_playwright([test_path])
+                        response['self_heal'] = {
+                            'attempted': True,
+                            'old_selector': failed_selector,
+                            'new_selector': new_sel,
+                            'returncode': result2.returncode,
+                            'stdout': result2.stdout,
+                            'stderr': result2.stderr
+                        }
+                    else:
+                        response['self_heal'] = {'attempted': True, 'reason': 'patch_failed'}
+                else:
+                    response['self_heal'] = {'attempted': True, 'reason': 'no_suggestions'}
+        return response
     except Exception as e:
         return {"error": str(e)}
 
@@ -180,21 +271,18 @@ def agent_run(payload: Dict):
         goal = payload.get('goal','')
         context = payload.get('context',{})
         result = run_agent(goal, context)
-        # If agent returns test code, save to tests/generated/
+        # If agent returns test code, save under Playwright project tests/generated/
         if isinstance(result, dict) and 'code' in result:
             test_code = result['code']
             test_name = result.get('test_id', f"gen_{os.urandom(4).hex()}")
-            gen_dir = os.path.join(os.path.dirname(__file__), '../../tests/generated')
+            gen_dir = os.path.join(_playwright_cwd(), 'tests', 'generated')
             os.makedirs(gen_dir, exist_ok=True)
             test_path = os.path.join(gen_dir, f"{test_name}.spec.ts")
             with open(test_path, 'w') as f:
                 f.write(test_code)
             # Optionally run the test
             try:
-                import subprocess
-                run_result = subprocess.run([
-                    'npx', 'playwright', 'test', test_path, '--reporter=list'
-                ], capture_output=True, text=True, timeout=300)
+                run_result, _, _ = _run_playwright([os.path.relpath(test_path, _playwright_cwd())])
                 result['run_output'] = run_result.stdout
             except Exception as e:
                 result['run_error'] = str(e)
@@ -214,6 +302,18 @@ def agent_run(payload: Dict):
         return {'result': result}
     except Exception as e:
         return {'error': str(e)}
+
+@app.get('/tests_generated')
+def list_generated_tests():
+    """List AI-generated tests under Playwright tests/generated directory."""
+    gen_dir = os.path.join(_playwright_cwd(), 'tests', 'generated')
+    files = []
+    if os.path.isdir(gen_dir):
+        for root, _, filenames in os.walk(gen_dir):
+            for n in filenames:
+                if n.endswith('.spec.ts'):
+                    files.append(os.path.relpath(os.path.join(root, n), _playwright_cwd()))
+    return {"files": sorted(files)}
 
 # Simple self-heal endpoint: suggest alternate selectors when selector not found
 @app.post('/self_heal')
