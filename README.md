@@ -13,6 +13,7 @@ What's included:
 - Playwright Node.js project that can run generated or example tests
 - React dashboard (dashboard/) for visualizing analytics and invoking endpoints
  - JIRA integration (optional): search issues, load details, and generate tests from issues
+   - Jira descriptions and Acceptance Criteria are parsed into structured context for higher-quality generation.
 - Docker Compose to run services locally
 - Simple model training script to create a demo defect predictor
 

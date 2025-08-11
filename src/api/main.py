@@ -130,14 +130,31 @@ def predict(req: PredictRequest):
 @app.post('/generate_test')
 def generate_test(req: GenerateTestRequest):
     try:
+        # If the source is a Jira issue, parse to structured context
+        source = req.source or {}
+        prompt_context = ""
+        if source.get('type') == 'jira':
+            try:
+                from src.tools.jira_parser import parse_issue
+                issue = source.get('issue') or {}
+                ctx = parse_issue(issue.get('summary'), issue.get('description'))
+                prompt_context = (
+                    "User Story: " + (ctx.get('user_story') or '') + "\n" +
+                    ("Acceptance Criteria:\n- " + "\n- ".join(ctx.get('acceptance_criteria') or []) + "\n" if ctx.get('acceptance_criteria') else "") +
+                    ("Gherkin Steps:\n" + "\n".join(ctx.get('gherkin') or []) + "\n" if ctx.get('gherkin') else "") +
+                    ("Test Goals:\n- " + "\n- ".join(ctx.get('test_goals') or []) + "\n" if ctx.get('test_goals') else "")
+                )
+            except Exception:
+                prompt_context = ''
         if OPENAI_KEY:
             # Use OpenAI API (legacy 0.28 client) to generate a Playwright test
             import openai
             openai.api_key = OPENAI_KEY
             prompt = (
-                "Write a Playwright test in TypeScript that exercises the user flow described below.\n"
+                "Write a Playwright test in TypeScript for the following requirements.\n"
                 "Return only the code block with no extra commentary.\n\n"
-                f"Flow: {req.source}\n"
+                + ("Context:\n" + prompt_context + "\n\n" if prompt_context else "")
+                + f"Input: {req.source}\n"
             )
             resp = openai.ChatCompletion.create(
                 model=os.getenv('LLM_MODEL', 'gpt-4'),
