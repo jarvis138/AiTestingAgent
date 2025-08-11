@@ -2,13 +2,8 @@ import os
 import json
 from typing import Dict, Any, List, Optional
 import requests
-from langchain import OpenAI
-from langchain.agents import Tool, initialize_agent
-from langchain.agents.agent_types import AgentType
-from langchain.tools import BaseTool
-from langchain.schema import AgentAction, AgentFinish
-from pydantic import BaseModel, Field
 import logging
+from pydantic import BaseModel, Field
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -190,42 +185,62 @@ def tool_heal(args: Dict) -> str:
     except Exception as e:
         return json.dumps({"error": f"Validation failed: {str(e)}"}, indent=2)
 
-# Enhanced tool definitions with better descriptions
-tools = [
-    Tool(
-        name="predict_defects", 
-        func=tool_predict, 
-        description="Predict defect risk for a file. Input: dict with 'file' (string) and 'features' (dict of metrics like loc, complexity, churn, num_devs)"
-    ),
-    Tool(
-        name="generate_tests", 
-        func=tool_generate, 
-        description="Generate test code using AI. Input: dict with 'source' containing test requirements or specifications"
-    ),
-    Tool(
-        name="run_tests", 
-        func=tool_run, 
-        description="Run tests in the test runner. Input: dict with 'tests' list of test file paths"
-    ),
-    Tool(
-        name="self_heal", 
-        func=tool_heal, 
-        description="Attempt to self-heal failing selectors. Input: dict with 'error' (string) and optional 'dom' (string)"
-    )
-]
+def _get_tools():
+    try:
+        from langchain.agents import Tool
+    except Exception:
+        # lightweight fallback: return simple descriptors; not used without LC
+        class _T:
+            def __init__(self, name, func, description):
+                self.name, self.func, self.description = name, func, description
+        Tool = _T  # type: ignore
+    return [
+        Tool(
+            name="predict_defects", 
+            func=tool_predict, 
+            description="Predict defect risk for a file. Input: dict with 'file' (string) and 'features' (dict of metrics like loc, complexity, churn, num_devs)"
+        ),
+        Tool(
+            name="generate_tests", 
+            func=tool_generate, 
+            description="Generate test code using AI. Input: dict with 'source' containing test requirements or specifications"
+        ),
+        Tool(
+            name="run_tests", 
+            func=tool_run, 
+            description="Run tests in the test runner. Input: dict with 'tests' list of test file paths"
+        ),
+        Tool(
+            name="self_heal", 
+            func=tool_heal, 
+            description="Attempt to self-heal failing selectors. Input: dict with 'error' (string) and optional 'dom' (string)"
+        )
+    ]
 
 def initialize_agent_with_fallback():
-    """Initialize agent with fallback to basic functionality if LLM fails"""
-    llm = get_llm_client()
-    
+    """Initialize agent with fallback to basic functionality if LLM or LangChain fails"""
+    try:
+        from langchain import OpenAI as LCOpenAI
+        from langchain.agents import initialize_agent
+        from langchain.agents.agent_types import AgentType
+    except Exception as e:
+        logger.warning(f"LangChain not available: {e}")
+        return None
+
+    llm = None
+    try:
+        if LLM_PROVIDER == 'openai' and OPENAI_KEY:
+            llm = LCOpenAI(api_key=OPENAI_KEY, temperature=0, model=LLM_MODEL)
+    except Exception as e:
+        logger.error(f"Failed to init LLM: {e}")
+
     if llm:
         try:
-            agent = initialize_agent(tools, llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True)
+            agent = initialize_agent(_get_tools(), llm, agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION, verbose=True)
             logger.info("LangChain agent initialized successfully")
             return agent
         except Exception as e:
             logger.error(f"Failed to initialize LangChain agent: {e}")
-    
     logger.warning("Using fallback agent without LLM")
     return None
 
@@ -238,7 +253,7 @@ def run_agent(goal: str, context: Dict=None) -> str:
         context = {}
     
     if not agent:
-        return "Agent not available. Check LLM configuration."
+        return "Agent not available. Install langchain and set OPENAI_API_KEY to enable."
     
     try:
         prompt = f"You are an automation testing assistant. Goal: {goal}. Context: {json.dumps(context)}"
