@@ -1,16 +1,25 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
-import subprocess, uuid, os, json
+import subprocess, uuid, os, json, shutil
 import pickle
 import traceback
 
 app = FastAPI(title='AI Testing Agent - Orchestrator')
 
+# Allow local dev UI and general usage; tighten in prod
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Analytics endpoint for dashboard charts
 @app.get('/analytics')
 def analytics():
-    import os, json
     mem_path = os.getenv('AGENT_MEMORY_PATH', 'data/memory.json')
     if not os.path.exists(mem_path):
         return {'runs': [], 'analytics': {}}
@@ -60,6 +69,25 @@ class RunTestRequest(BaseModel):
 def root():
     return {"status":"ok", "message":"AI Testing Agent Orchestrator"}
 
+# Simple health/status endpoint
+@app.get('/health')
+def health():
+    mem_path = os.getenv('AGENT_MEMORY_PATH', 'data/memory.json')
+    mem_runs = 0
+    try:
+        if os.path.exists(mem_path):
+            with open(mem_path, 'r') as f:
+                mem = json.load(f)
+                mem_runs = len(mem.get('runs', []))
+    except Exception:
+        pass
+    return {
+        'status': 'ok',
+        'model_loaded': bool(model is not None),
+        'feature_columns': len(model_meta.get('feature_columns', [])) if isinstance(model_meta, dict) else 0,
+        'memory_runs': mem_runs
+    }
+
 # Defect predictor using loaded model or heuristic fallback
 @app.post('/predict', response_model=PredictResponse)
 def predict(req: PredictRequest):
@@ -94,16 +122,16 @@ def predict(req: PredictRequest):
 def generate_test(req: GenerateTestRequest):
     try:
         if OPENAI_KEY:
-            # Use OpenAI API to generate a Playwright test (simple prompt)
+            # Use OpenAI API (legacy 0.28 client) to generate a Playwright test
             import openai
             openai.api_key = OPENAI_KEY
-            prompt = f"""Write a Playwright test in TypeScript that exercises the user flow described below.
-Return only the code block with no extra commentary.
-
-Flow: {req.source}
-"""
+            prompt = (
+                "Write a Playwright test in TypeScript that exercises the user flow described below.\n"
+                "Return only the code block with no extra commentary.\n\n"
+                f"Flow: {req.source}\n"
+            )
             resp = openai.ChatCompletion.create(
-                model='gpt-4o-mini',
+                model=os.getenv('LLM_MODEL', 'gpt-4'),
                 messages=[{'role':'user','content':prompt}],
                 max_tokens=800,
                 temperature=0.1
@@ -126,8 +154,22 @@ test('generated test - example', async ({ page }) => {
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-# Run tests by calling the Playwright runner container (expects tests available)
+# Run tests locally in the playwright folder using npx, with safe fallbacks
 @app.post('/run_tests')
+def run_tests(req: RunTestRequest):
+    try:
+        # Ensure we have npx available
+        npx = shutil.which('npx') or shutil.which('npx.cmd')
+        cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../playwright'))
+        if not os.path.isdir(cwd):
+            cwd = os.path.abspath(os.path.join(os.getcwd(), 'playwright'))
+        if not npx:
+            return {"error": "npx not found. Install Node.js or run tests via the playwright Docker service."}
+        cmd = [npx, 'playwright', 'test', *req.tests, '--reporter=list'] if req.tests else [npx, 'playwright', 'test', '--reporter=list']
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=600)
+        return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post('/agent')
 def agent_run(payload: Dict):
@@ -173,28 +215,8 @@ def agent_run(payload: Dict):
     except Exception as e:
         return {'error': str(e)}
 
-
-def run_tests(req: RunTestRequest):
-    try:
-        result = subprocess.run(['bash','-lc','cd playwright && npm test'], capture_output=True, text=True, timeout=300)
-        return {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
-    except Exception as e:
-        return {"error": str(e)}
-
 # Simple self-heal endpoint: suggest alternate selectors when selector not found
 @app.post('/self_heal')
-
-@app.post('/explain')
-def explain(req: PredictRequest):
-    try:
-        # require model_meta with feature_columns
-        if model_meta is None or 'feature_columns' not in model_meta:
-            raise Exception('Explainability requires a model trained with feature columns. Train KC1 model first.')
-        from src.models.explain_shap import explain_instance
-        return explain_instance(req.features)
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
 def self_heal(payload: Dict):
     try:
         error = payload.get('error','')
@@ -208,3 +230,15 @@ def self_heal(payload: Dict):
         return {"fixed": bool(suggestions), "suggestions": suggestions}
     except Exception as e:
         return {"error": str(e)}
+
+@app.post('/explain')
+def explain(req: PredictRequest):
+    try:
+        # require model_meta with feature_columns
+        if model_meta is None or 'feature_columns' not in model_meta:
+            raise Exception('Explainability requires a model trained with feature columns. Train KC1 model first.')
+        from src.models.explain_shap import explain_instance
+        return explain_instance(req.features)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

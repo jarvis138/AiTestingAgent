@@ -12,14 +12,14 @@ test('generated from prompt', async ({ page }) => {
     try:
         import openai
         openai.api_key = OPENAI_KEY
-        resp = openai.ChatCompletion.create(
-            model='gpt-4o-mini',
-            messages=[{'role':'user','content': prompt}],
-            max_tokens=800,
-            temperature=0.1
-        )
-        code = resp['choices'][0]['message']['content']
-        return code
+    resp = openai.ChatCompletion.create(
+      model=os.getenv('LLM_MODEL', 'gpt-4'),
+      messages=[{'role':'user','content': prompt}],
+      max_tokens=800,
+      temperature=0.1
+    )
+    code = resp['choices'][0]['message']['content']
+    return code
     except Exception as e:
         return f'/* OpenAI error: {e} */\n' + """import { test, expect } from '@playwright/test';
 test('generated fallback', async ({ page }) => {
