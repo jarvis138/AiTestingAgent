@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./src:/app/src
+      - ./src/models:/app/src/models
+    environment:
+      - FASTAPI_PORT=8000
+      - PYTHONPATH=/app
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  playwright:
+    build:
+      context: ./playwright
+      dockerfile: Dockerfile
+    volumes:
+      - ./playwright:/app
+    depends_on:
+      - orchestrator
+
+  # React dashboard runs locally on port 3000, not in Docker
+  # Use: cd dashboard && npm start

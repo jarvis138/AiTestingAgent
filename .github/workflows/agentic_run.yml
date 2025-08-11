@@ -1,0 +1,30 @@
+name: Agentic QA on PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  agent-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+      - name: Start services (background)
+        run: |
+          docker-compose up -d --build
+      - name: Call agent endpoint
+        run: |
+          python - <<'PY'
+          import requests, os, time, json
+          API=os.getenv('FASTAPI_URL','http://localhost:8000')
+          payload={'goal':'Run prioritized tests for changed files','context':{}}
+          print('Calling agent...')
+          print(requests.post(API + '/agent', json=payload).text)
+          PY

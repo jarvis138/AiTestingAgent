@@ -1,0 +1,11 @@
+{
+  "name": "ai-testing-playwright",
+  "version": "0.1.0",
+  "scripts": {
+    "test": "npx playwright test --reporter=list",
+    "install-browsers": "npx playwright install --with-deps"
+  },
+  "devDependencies": {
+    "playwright": "^1.44.0"
+  }
+}
