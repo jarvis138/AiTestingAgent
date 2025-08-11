@@ -66,6 +66,14 @@ class RunTestRequest(BaseModel):
     tests: List[str]
     self_heal: Optional[bool] = False
 
+class JiraSearchRequest(BaseModel):
+    jql: str
+    max_results: Optional[int] = 20
+
+class JiraLinkRunRequest(BaseModel):
+    issue_key: str
+    result: Dict
+
 @app.get('/')
 def root():
     return {"status":"ok", "message":"AI Testing Agent Orchestrator"}
@@ -223,6 +231,11 @@ def run_tests(req: RunTestRequest):
         if err:
             return err
         response = {"returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}
+        try:
+            from src.ai.memory.execution_memory import append_run
+            append_run({'action': 'run_tests', 'tests': req.tests, 'result': {'run_output': result.stdout, 'returncode': result.returncode}})
+        except Exception:
+            pass
         if result.returncode != 0 and req.self_heal and req.tests:
             # attempt self-heal for first test file
             failed_selector = _extract_selector_from_output(result.stderr or result.stdout)
@@ -254,6 +267,11 @@ def run_tests(req: RunTestRequest):
                             'stdout': result2.stdout,
                             'stderr': result2.stderr
                         }
+                        try:
+                            from src.ai.memory.execution_memory import append_run
+                            append_run({'action': 'self_heal', 'tests': [test_path], 'result': {'run_output': result2.stdout, 'returncode': result2.returncode}})
+                        except Exception:
+                            pass
                     else:
                         response['self_heal'] = {'attempted': True, 'reason': 'patch_failed'}
                 else:
@@ -314,6 +332,35 @@ def list_generated_tests():
                 if n.endswith('.spec.ts'):
                     files.append(os.path.relpath(os.path.join(root, n), _playwright_cwd()))
     return {"files": sorted(files)}
+
+# JIRA integration endpoints
+@app.post('/jira/search')
+def jira_search(req: JiraSearchRequest):
+    try:
+        from src.tools.jira_client import search_issues
+        return search_issues(req.jql, req.max_results or 20)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get('/jira/issue/{key}')
+def jira_issue(key: str):
+    try:
+        from src.tools.jira_client import get_issue
+        return get_issue(key)
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post('/jira/link_test_run')
+def jira_link_test_run(req: JiraLinkRunRequest):
+    """Attach a test run result as a comment to a JIRA issue."""
+    try:
+        from src.tools.jira_client import add_comment
+        summary = req.result.get('summary') or ''
+        rc = req.result.get('returncode')
+        comment = f"Automated test run:\nReturn code: {rc}\nSummary: {summary}\n```${req.result.get('stdout','')[:2000]}```"
+        return add_comment(req.issue_key, comment)
+    except Exception as e:
+        return {"error": str(e)}
 
 # Simple self-heal endpoint: suggest alternate selectors when selector not found
 @app.post('/self_heal')

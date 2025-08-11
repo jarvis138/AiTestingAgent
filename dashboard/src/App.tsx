@@ -10,6 +10,7 @@ import Predictions from './pages/Predictions';
 import TestGeneration from './pages/TestGeneration';
 import TestExecution from './pages/TestExecution';
 import Agent from './pages/Agent';
+import Jira from './pages/Jira';
 
 const theme = createTheme({
   palette: {
@@ -47,6 +48,7 @@ function App() {
                 <Route path="/test-generation" element={<TestGeneration />} />
                 <Route path="/test-execution" element={<TestExecution />} />
                 <Route path="/agent" element={<Agent />} />
+                <Route path="/jira" element={<Jira />} />
               </Routes>
             </Box>
           </Box>

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Typography, Box, TextField, Button, CircularProgress, Paper, FormControlLabel, Switch } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import { Typography, Box, TextField, Button, CircularProgress, Paper, FormControlLabel, Switch, FormControl, InputLabel, Select, MenuItem } from '@mui/material';
 import axios from 'axios';
 
 const TestExecution = () => {
@@ -7,6 +7,23 @@ const TestExecution = () => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [selfHeal, setSelfHeal] = useState<boolean>(true);
+  const [generatedFiles, setGeneratedFiles] = useState<string[]>([]);
+  const [loadingList, setLoadingList] = useState<boolean>(false);
+
+  const loadGenerated = async () => {
+    setLoadingList(true);
+    try {
+      const resp = await axios.get('/tests_generated');
+      setGeneratedFiles(resp.data.files || []);
+    } catch (e) {
+      setGeneratedFiles([]);
+    }
+    setLoadingList(false);
+  };
+
+  useEffect(() => {
+    loadGenerated();
+  }, []);
 
   const handleRunTest = async () => {
     setLoading(true);
@@ -30,7 +47,27 @@ const TestExecution = () => {
       <Typography variant="body1" sx={{ mb: 2 }}>
         Monitor and manage test execution in sandboxed environments.
       </Typography>
-  <TextField label="Test File" value={testFile} onChange={e => setTestFile(e.target.value)} sx={{ mr: 2 }} />
+  <TextField label="Test File" value={testFile} onChange={e => setTestFile(e.target.value)} sx={{ mr: 2, minWidth: 320 }} />
+  <FormControl sx={{ minWidth: 320, mr: 2 }}>
+    <InputLabel id="gen-tests-label">Generated Tests</InputLabel>
+    <Select
+      labelId="gen-tests-label"
+      label="Generated Tests"
+      value=""
+      renderValue={() => 'Select to fill'}
+      onChange={(e) => {
+        const val = e.target.value as string;
+        if (val) setTestFile(val);
+      }}
+    >
+      {generatedFiles.map((f) => (
+        <MenuItem key={f} value={f}>{f}</MenuItem>
+      ))}
+    </Select>
+  </FormControl>
+  <Button variant="outlined" onClick={loadGenerated} disabled={loadingList} sx={{ mr: 2 }}>
+    {loadingList ? 'Refreshing…' : 'Refresh'}
+  </Button>
   <FormControlLabel control={<Switch checked={selfHeal} onChange={(_, v) => setSelfHeal(v)} />} label="Self-heal" sx={{ mr: 2 }} />
   <Button variant="contained" onClick={handleRunTest} disabled={loading}>Run Test</Button>
       {loading && <CircularProgress sx={{ mt: 2 }} />}

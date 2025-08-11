@@ -27,6 +27,7 @@ const Navbar: React.FC = () => {
     { path: '/test-generation', label: 'Test Generation', icon: <CodeIcon /> },
     { path: '/test-execution', label: 'Test Execution', icon: <PlayIcon /> },
     { path: '/agent', label: 'AI Agent', icon: <AgentIcon /> },
+  { path: '/jira', label: 'Jira', icon: <BugIcon /> },
   ];
 
   return (

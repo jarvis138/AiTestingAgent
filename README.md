@@ -12,6 +12,7 @@ What's included:
   - `/self_heal` - basic heuristic suggestions for locator fixes
 - Playwright Node.js project that can run generated or example tests
 - React dashboard (dashboard/) for visualizing analytics and invoking endpoints
+ - JIRA integration (optional): search issues, load details, and generate tests from issues
 - Docker Compose to run services locally
 - Simple model training script to create a demo defect predictor
 
@@ -28,6 +29,20 @@ What's included:
 5. Visit:
    - FastAPI: http://localhost:8000 (health: /health)
    - React Dashboard: cd dashboard && npm start (http://localhost:3000)
+   - JIRA page: http://localhost:3000/jira (requires JIRA env config)
+
+## JIRA Integration (optional)
+Set these environment variables to enable JIRA (Cloud):
+
+- JIRA_BASE_URL=https://your-domain.atlassian.net
+- JIRA_EMAIL=you@example.com
+- JIRA_API_TOKEN=your_api_token
+
+Endpoints:
+- POST /jira/search { jql, max_results? }
+- GET /jira/issue/{key}
+- POST /jira/link_test_run { issue_key, result }
+
 
 ## Notes
 - This is a starter. For production, you should:
